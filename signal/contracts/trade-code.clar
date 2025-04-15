@@ -1,5 +1,5 @@
-;; Crypto Trading Strategy Smart Contract - Stage 2
-;; A blockchain-based trading strategy system with time-locks and profit distribution
+;; Crypto Trading Strategy Smart Contract 
+;; A blockchain-based trading strategy system with sequential signals and profit distribution
 
 ;; Constants
 (define-constant ERR-NOT-STRATEGY-OWNER (err u1))
@@ -8,7 +8,9 @@
 (define-constant ERR-ALREADY-EXECUTED (err u4))
 (define-constant ERR-WRONG-EXECUTION-HASH (err u5))
 (define-constant ERR-LOCKUP-PERIOD-ACTIVE (err u6))
-(define-constant ERR-INVALID-PARAMETER (err u7))
+(define-constant ERR-INSUFFICIENT-CAPITAL (err u7))
+(define-constant ERR-INVALID-PARAMETER (err u8))
+(define-constant ERR-SIGNAL-EXISTS (err u9))
 (define-constant MAX-SIGNAL-ID u100) ;; Maximum allowed signal ID
 
 ;; Data Variables
@@ -42,13 +44,19 @@
     }
 )
 
-;; Signal Executions
+;; Trader Execution History
 (define-map signal-executions
     {signal: uint, trader: principal}
     {
         attempts: uint,
         executed-at: (optional uint)
     }
+)
+
+;; Events
+(define-map signal-successes
+    uint
+    (list 10 {trader: principal, executed-at: uint})
 )
 
 ;; Authorization
@@ -84,6 +92,9 @@
         
         ;; Validate signal-id is within acceptable range
         (asserts! (<= signal-id MAX-SIGNAL-ID) ERR-INVALID-PARAMETER)
+        
+        ;; Check if signal already exists to prevent overwriting
+        (asserts! (is-none (map-get? trading-signals signal-id)) ERR-SIGNAL-EXISTS)
         
         ;; Validate lockup end is in the future
         (asserts! (>= lockup-end (var-get current-block-height)) ERR-INVALID-PARAMETER)
@@ -174,6 +185,16 @@
                 ;; Distribute profit share
                 (try! (stx-transfer? (get profit-share signal) (var-get strategy-owner) tx-sender))
                 
+                ;; Record success
+                (match (map-get? signal-successes signal-id)
+                    successes (map-set signal-successes signal-id
+                        (unwrap! (as-max-len?
+                            (append successes {trader: tx-sender, executed-at: current-height})
+                            u10)
+                            ERR-INVALID-SIGNAL))
+                    (map-set signal-successes signal-id
+                        (list {trader: tx-sender, executed-at: current-height})))
+                
                 (ok true))
             ERR-WRONG-EXECUTION-HASH)))
 
@@ -188,8 +209,8 @@
 (define-read-only (get-trader-status (trader principal))
     (map-get? trader-performance trader))
 
-(define-read-only (get-execution-status (signal-id uint) (trader principal))
-    (map-get? signal-executions {signal: signal-id, trader: trader}))
+(define-read-only (get-signal-successes (signal-id uint))
+    (map-get? signal-successes signal-id))
 
 (define-read-only (get-current-block-height)
     (var-get current-block-height))
